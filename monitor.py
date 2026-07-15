@@ -65,7 +65,9 @@ def send_telegram(message: str) -> None:
         },
         timeout=20,
     )
-    print("Telegram status:", r.status_code, r.text[:300])
+
+    print("Telegram status:", r.status_code)
+    print("Telegram response:", r.text[:500])
     r.raise_for_status()
 
 
@@ -80,9 +82,23 @@ def main() -> None:
         "content-type": "application/json",
         "origin": "https://b1009933.yclients.com",
         "referer": "https://b1009933.yclients.com/",
-        "user-agent": "Mozilla/5.0",
+        "priority": "u=1, i",
+        "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "user-agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/150.0.0.0 Safari/537.36"
+        ),
         "x-app-client-context": yclients_context,
+        "x-app-client-context-analytics-udid": "24284246-dc85-4d77-8367-01cd116d94ae",
         "x-app-client-context-version": "2",
+        "x-app-signature": "",
+        "x-yclients-application-action": "",
         "x-yclients-application-name": "client.booking",
         "x-yclients-application-platform": "angular-18.2.13",
         "x-yclients-application-version": "1284397.b9c480ff",
@@ -104,19 +120,20 @@ def main() -> None:
     }
 
     r = requests.post(URL, headers=headers, json=payload, timeout=30)
+
     print("YCLIENTS status:", r.status_code)
-    print("Response preview:", r.text[:1000])
+    print("YCLIENTS response preview:", r.text[:1500])
+
     r.raise_for_status()
 
     data = r.json()
     all_text = "\n".join(walk_strings(data))
 
-    # В ответе search-timeslots обычно лежат только доступные слоты.
-    # Поэтому если там появляется 20:00 — считаем, что слот освободился.
+    found_times = sorted(set(re.findall(r"\b(?:[01]\d|2[0-3]):[0-5]\d\b", all_text)))
+
     time_pattern = rf"(?<!\d){re.escape(TARGET_TIME)}(?::00)?(?!\d)"
     is_free = bool(re.search(time_pattern, all_text))
 
-    found_times = sorted(set(re.findall(r"\b(?:[01]\d|2[0-3]):[0-5]\d\b", all_text)))
     print("Found times:", found_times)
     print(f"Target {TARGET_DATE} {TARGET_TIME} free:", is_free)
 
@@ -134,6 +151,8 @@ def main() -> None:
 
     state["was_free"] = is_free
     state["last_checked"] = f"{TARGET_DATE} {TARGET_TIME}"
+    state["found_times"] = found_times
+
     save_state(state)
 
 
