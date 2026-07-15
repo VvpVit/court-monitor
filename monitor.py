@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import requests
@@ -10,7 +11,16 @@ import requests
 URL = "https://platform.yclients.com/api/v1/b2c/booking/availability/search-timeslots"
 
 LOCATION_ID = 936902
-TARGET_DATE = "2026-07-21"
+
+TARGET_DATES = [
+    "2026-07-21",
+    "2026-07-28",
+    "2026-08-04",
+    "2026-08-11",
+    "2026-08-18",
+    "2026-08-25",
+]
+
 TARGET_TIME = "20:00"
 
 STATE_FILE = Path(".slot_state.json")
@@ -26,11 +36,17 @@ def get_required_env(name: str) -> str:
 
 def load_state() -> dict:
     if not STATE_FILE.exists():
-        return {}
+        return {"dates": {}}
+
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except Exception:
-        return {}
+        return {"dates": {}}
+
+    if "dates" not in state:
+        state["dates"] = {}
+
+    return state
 
 
 def save_state(state: dict) -> None:
@@ -71,11 +87,11 @@ def send_telegram(message: str) -> None:
     r.raise_for_status()
 
 
-def main() -> None:
+def make_headers() -> dict:
     yclients_bearer = get_required_env("YCLIENTS_BEARER")
     yclients_context = get_required_env("YCLIENTS_CONTEXT")
 
-    headers = {
+    return {
         "accept": "application/json, text/plain, */*",
         "accept-language": "ru-RU",
         "authorization": f"Bearer {yclients_bearer}",
@@ -104,12 +120,14 @@ def main() -> None:
         "x-yclients-application-version": "1284397.b9c480ff",
     }
 
+
+def check_date(headers: dict, target_date: str) -> tuple[bool, list[str]]:
     payload = {
         "context": {
             "location_id": LOCATION_ID,
         },
         "filter": {
-            "date": TARGET_DATE,
+            "date": target_date,
             "records": [
                 {
                     "staff_id": None,
@@ -121,8 +139,10 @@ def main() -> None:
 
     r = requests.post(URL, headers=headers, json=payload, timeout=30)
 
+    print("=" * 60)
+    print("Checking date:", target_date)
     print("YCLIENTS status:", r.status_code)
-    print("YCLIENTS response preview:", r.text[:1500])
+    print("YCLIENTS response preview:", r.text[:1200])
 
     r.raise_for_status()
 
@@ -135,23 +155,43 @@ def main() -> None:
     is_free = bool(re.search(time_pattern, all_text))
 
     print("Found times:", found_times)
-    print(f"Target {TARGET_DATE} {TARGET_TIME} free:", is_free)
+    print(f"Target {target_date} {TARGET_TIME} free:", is_free)
 
+    return is_free, found_times
+
+
+def main() -> None:
+    headers = make_headers()
     state = load_state()
-    was_free = state.get("was_free", False)
 
-    if is_free and not was_free:
+    newly_free_dates = []
+
+    for target_date in TARGET_DATES:
+        is_free, found_times = check_date(headers, target_date)
+
+        date_state = state["dates"].get(target_date, {})
+        was_free = date_state.get("was_free", False)
+
+        if is_free and not was_free:
+            newly_free_dates.append(target_date)
+
+        state["dates"][target_date] = {
+            "was_free": is_free,
+            "last_checked": f"{target_date} {TARGET_TIME}",
+            "found_times": found_times,
+        }
+
+        time.sleep(0.5)
+
+    if newly_free_dates:
+        dates_text = "\n".join([f"— {date} в {TARGET_TIME}" for date in newly_free_dates])
+
         send_telegram(
             "🚨 КОРТ ОСВОБОДИЛСЯ!\n\n"
-            f"Дата: {TARGET_DATE}\n"
-            f"Время: {TARGET_TIME}\n\n"
+            f"Появился слот:\n{dates_text}\n\n"
             "Беги бронировать:\n"
             "https://b1009933.yclients.com/company/936902/personal/menu?o="
         )
-
-    state["was_free"] = is_free
-    state["last_checked"] = f"{TARGET_DATE} {TARGET_TIME}"
-    state["found_times"] = found_times
 
     save_state(state)
 
