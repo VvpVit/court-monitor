@@ -16,8 +16,6 @@ API_URL = (
     "availability/search-timeslots"
 )
 
-API_PREFIX = "https://platform.yclients.com/api/v1/b2c/booking/"
-
 LOCATION_ID = 936902
 TARGET_TIME = "20:00"
 
@@ -32,13 +30,31 @@ TARGET_DATES = [
 
 STATE_FILE = Path(".slot_state.json")
 
-# Эти заголовки нельзя бездумно повторять в отдельном API-запросе.
-EXCLUDED_HEADERS = {
-    "host",
-    "content-length",
-    "connection",
-    "cookie",
-    "accept-encoding",
+# Берём только нужные обычные HTTP-заголовки.
+# Служебные HTTP/2-заголовки вроде :authority сюда не попадут.
+ALLOWED_HEADERS = {
+    "accept",
+    "accept-language",
+    "authorization",
+    "content-type",
+    "origin",
+    "priority",
+    "referer",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "sec-fetch-dest",
+    "sec-fetch-mode",
+    "sec-fetch-site",
+    "user-agent",
+    "x-app-client-context",
+    "x-app-client-context-analytics-udid",
+    "x-app-client-context-version",
+    "x-app-signature",
+    "x-yclients-application-action",
+    "x-yclients-application-name",
+    "x-yclients-application-platform",
+    "x-yclients-application-version",
 }
 
 
@@ -127,7 +143,7 @@ def normalize_time(value: object) -> str | None:
 
         return f"{hour:02d}:{minute:02d}"
 
-    except (ValueError, TypeError):
+    except (TypeError, ValueError):
         return None
 
 
@@ -151,7 +167,9 @@ def extract_bookable_times(data: dict) -> list[str]:
         if attributes.get("is_bookable") is not True:
             continue
 
-        normalized = normalize_time(attributes.get("time"))
+        normalized = normalize_time(
+            attributes.get("time")
+        )
 
         if normalized:
             result.add(normalized)
@@ -165,7 +183,8 @@ def capture_fresh_headers(page) -> dict[str, str]:
     def handle_request(request) -> None:
         nonlocal captured
 
-        if not request.url.startswith(API_PREFIX):
+        # Нам нужны заголовки именно запроса свободных времён.
+        if "/availability/search-timeslots" not in request.url:
             return
 
         try:
@@ -173,34 +192,40 @@ def capture_fresh_headers(page) -> dict[str, str]:
         except Exception:
             request_headers = request.headers
 
-        authorization = request_headers.get("authorization")
-        client_context = request_headers.get("x-app-client-context")
-
-        if not authorization or not client_context:
-            return
-
-        clean_headers = {}
+        clean_headers: dict[str, str] = {}
 
         for name, value in request_headers.items():
-            lower_name = name.lower()
+            lower_name = name.lower().strip()
 
-            if lower_name in EXCLUDED_HEADERS:
+            # Главный фикс текущей ошибки.
+            if lower_name.startswith(":"):
+                continue
+
+            if lower_name not in ALLOWED_HEADERS:
                 continue
 
             clean_headers[lower_name] = value
+
+        if not clean_headers.get("authorization"):
+            return
+
+        if not clean_headers.get("x-app-client-context"):
+            return
 
         clean_headers["accept"] = (
             "application/json, text/plain, */*"
         )
         clean_headers["content-type"] = "application/json"
-        clean_headers["origin"] = "https://b1009933.yclients.com"
+        clean_headers["origin"] = (
+            "https://b1009933.yclients.com"
+        )
         clean_headers["referer"] = (
             "https://b1009933.yclients.com/"
         )
 
         captured = clean_headers
 
-        print("Пойманы свежие заголовки из запроса:")
+        print("Пойманы свежие заголовки search-timeslots")
         print(request.url)
 
     page.on("request", handle_request)
@@ -211,43 +236,31 @@ def capture_fresh_headers(page) -> dict[str, str]:
         timeout=60_000,
     )
 
-    page.wait_for_timeout(7_000)
+    # Ждём автоматической загрузки расписания.
+    for _ in range(15):
+        if captured:
+            break
+
+        page.wait_for_timeout(1_000)
 
     if not captured:
-        print("С первого раза заголовки не пойманы. Перезагрузка.")
+        print("Перезагружаю страницу для получения заголовков")
 
         page.reload(
             wait_until="domcontentloaded",
             timeout=60_000,
         )
 
-        page.wait_for_timeout(7_000)
+        for _ in range(15):
+            if captured:
+                break
 
-    if not captured:
-        # Иногда запрос появляется после открытия одного из пунктов меню.
-        labels = [
-            "Выбрать корт",
-            "Выбрать дату и время",
-            "Выбрать услугу",
-        ]
-
-        for label in labels:
-            try:
-                locator = page.get_by_text(label, exact=False)
-
-                if locator.count() > 0:
-                    locator.first.click(timeout=5_000)
-                    page.wait_for_timeout(5_000)
-
-                if captured:
-                    break
-
-            except Exception as exc:
-                print(f"Не удалось нажать «{label}»:", repr(exc))
+            page.wait_for_timeout(1_000)
 
     if not captured:
         raise RuntimeError(
-            "Не удалось получить свежие заголовки YCLIENTS"
+            "Не удалось получить свежие заголовки "
+            "запроса search-timeslots"
         )
 
     return captured
@@ -290,7 +303,9 @@ def check_all_dates() -> dict[str, dict]:
     results: dict[str, dict] = {}
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(
+            headless=True
+        )
 
         context = browser.new_context(
             locale="ru-RU",
@@ -364,11 +379,11 @@ def main() -> int:
 
         print("MONITOR ERROR:", error_text)
 
-        # Пишем об ошибке один раз, а не каждые пять минут.
+        # Уведомляем об ошибке один раз, без спама.
         if not state.get("monitor_error"):
             send_telegram(
                 "⚠️ Монитор кортов временно не смог "
-                "проверить расписание YCLIENTS.\n\n"
+                "проверить YCLIENTS.\n\n"
                 f"Ошибка: {error_text[:350]}"
             )
 
@@ -377,10 +392,13 @@ def main() -> int:
 
         save_state(state)
 
-        # GitHub будет зелёным и не станет спамить письмами.
+        # Не заставляем GitHub слать письма каждые 5 минут.
         return 0
 
-    monitor_was_broken = bool(state.get("monitor_error"))
+    monitor_was_broken = bool(
+        state.get("monitor_error")
+    )
+
     startup_not_confirmed = not bool(
         state.get("browser_monitor_started")
     )
@@ -388,7 +406,7 @@ def main() -> int:
     state["monitor_error"] = False
     state.pop("last_error", None)
 
-    # После ремонта или первого успешного запуска проверяем Telegram.
+    # После ремонта или первого запуска отправляем тест.
     if monitor_was_broken or startup_not_confirmed:
         telegram_ok = send_telegram(
             "✅ Монитор кортов работает.\n\n"
@@ -402,9 +420,15 @@ def main() -> int:
     newly_free_dates: list[str] = []
 
     for target_date, result in results.items():
-        previous = state["dates"].get(target_date, {})
+        previous = state["dates"].get(
+            target_date,
+            {},
+        )
 
-        was_free = bool(previous.get("was_free", False))
+        was_free = bool(
+            previous.get("was_free", False)
+        )
+
         is_free = bool(result["is_free"])
 
         if is_free and not was_free:
@@ -428,9 +452,12 @@ def main() -> int:
     for target_date, result in results.items():
         is_free = bool(result["is_free"])
 
-        # Если Telegram не отправил алерт, сохраняем старое
-        # состояние, чтобы повторить попытку через пять минут.
-        if target_date in newly_free_dates and not alert_sent:
+        # Если Telegram не отправил алерт,
+        # повторим попытку при следующем запуске.
+        if (
+            target_date in newly_free_dates
+            and not alert_sent
+        ):
             continue
 
         state["dates"][target_date] = {
