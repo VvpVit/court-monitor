@@ -16,11 +16,10 @@ API_URL = (
     "availability/search-timeslots"
 )
 
-API_PREFIX = (
-    "https://platform.yclients.com/api/v1/b2c/booking/"
-)
+API_PREFIX = "https://platform.yclients.com/api/v1/b2c/booking/"
 
 LOCATION_ID = 936902
+TARGET_TIME = "20:00"
 
 TARGET_DATES = [
     "2026-07-21",
@@ -31,24 +30,25 @@ TARGET_DATES = [
     "2026-08-25",
 ]
 
-TARGET_TIME = "20:00"
-
 STATE_FILE = Path(".slot_state.json")
 
-FETCH_HEADERS = {
-    "accept",
-    "accept-language",
-    "authorization",
-    "content-type",
-    "x-app-client-context",
-    "x-app-client-context-analytics-udid",
-    "x-app-client-context-version",
-    "x-app-signature",
-    "x-yclients-application-action",
-    "x-yclients-application-name",
-    "x-yclients-application-platform",
-    "x-yclients-application-version",
+# Эти заголовки нельзя бездумно повторять в отдельном API-запросе.
+EXCLUDED_HEADERS = {
+    "host",
+    "content-length",
+    "connection",
+    "cookie",
+    "accept-encoding",
 }
+
+
+def get_required_env(name: str) -> str:
+    value = os.getenv(name)
+
+    if not value:
+        raise RuntimeError(f"Не задан GitHub Secret: {name}")
+
+    return value
 
 
 def load_state() -> dict:
@@ -83,31 +83,13 @@ def save_state(state: dict) -> None:
     )
 
 
-def get_required_env(name: str) -> str:
-    value = os.getenv(name)
-
-    if not value:
-        raise RuntimeError(
-            f"Не задан GitHub Secret: {name}"
-        )
-
-    return value
-
-
 def send_telegram(message: str) -> bool:
     try:
-        bot_token = get_required_env(
-            "TELEGRAM_BOT_TOKEN"
-        )
-        chat_id = get_required_env(
-            "TELEGRAM_CHAT_ID"
-        )
+        bot_token = get_required_env("TELEGRAM_BOT_TOKEN")
+        chat_id = get_required_env("TELEGRAM_CHAT_ID")
 
         response = requests.post(
-            (
-                "https://api.telegram.org/bot"
-                f"{bot_token}/sendMessage"
-            ),
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
             json={
                 "chat_id": chat_id,
                 "text": message,
@@ -116,14 +98,8 @@ def send_telegram(message: str) -> bool:
             timeout=25,
         )
 
-        print(
-            "Telegram status:",
-            response.status_code,
-        )
-        print(
-            "Telegram response:",
-            response.text[:500],
-        )
+        print("Telegram status:", response.status_code)
+        print("Telegram response:", response.text[:500])
 
         response.raise_for_status()
         return True
@@ -135,9 +111,6 @@ def send_telegram(message: str) -> bool:
 
 def normalize_time(value: object) -> str | None:
     if not isinstance(value, str):
-        return None
-
-    if ":" not in value:
         return None
 
     try:
@@ -154,23 +127,23 @@ def normalize_time(value: object) -> str | None:
 
         return f"{hour:02d}:{minute:02d}"
 
-    except (TypeError, ValueError):
+    except (ValueError, TypeError):
         return None
 
 
-def extract_bookable_times(
-    data: dict,
-) -> list[str]:
+def extract_bookable_times(data: dict) -> list[str]:
     result: set[str] = set()
 
-    for item in data.get("data", []):
+    items = data.get("data", [])
+
+    if not isinstance(items, list):
+        return []
+
+    for item in items:
         if not isinstance(item, dict):
             continue
 
-        attributes = item.get(
-            "attributes",
-            {},
-        )
+        attributes = item.get("attributes", {})
 
         if not isinstance(attributes, dict):
             continue
@@ -178,9 +151,7 @@ def extract_bookable_times(
         if attributes.get("is_bookable") is not True:
             continue
 
-        normalized = normalize_time(
-            attributes.get("time")
-        )
+        normalized = normalize_time(attributes.get("time"))
 
         if normalized:
             result.add(normalized)
@@ -198,34 +169,39 @@ def capture_fresh_headers(page) -> dict[str, str]:
             return
 
         try:
-            headers = request.all_headers()
+            request_headers = request.all_headers()
         except Exception:
-            headers = request.headers
+            request_headers = request.headers
 
-        authorization = headers.get(
-            "authorization"
-        )
-        client_context = headers.get(
-            "x-app-client-context"
-        )
+        authorization = request_headers.get("authorization")
+        client_context = request_headers.get("x-app-client-context")
 
         if not authorization or not client_context:
             return
 
-        captured = {
-            name: value
-            for name, value in headers.items()
-            if name.lower() in FETCH_HEADERS
-        }
+        clean_headers = {}
 
-        captured["content-type"] = (
-            "application/json"
+        for name, value in request_headers.items():
+            lower_name = name.lower()
+
+            if lower_name in EXCLUDED_HEADERS:
+                continue
+
+            clean_headers[lower_name] = value
+
+        clean_headers["accept"] = (
+            "application/json, text/plain, */*"
+        )
+        clean_headers["content-type"] = "application/json"
+        clean_headers["origin"] = "https://b1009933.yclients.com"
+        clean_headers["referer"] = (
+            "https://b1009933.yclients.com/"
         )
 
-        print(
-            "Captured fresh YCLIENTS headers from:",
-            request.url,
-        )
+        captured = clean_headers
+
+        print("Пойманы свежие заголовки из запроса:")
+        print(request.url)
 
     page.on("request", handle_request)
 
@@ -235,43 +211,10 @@ def capture_fresh_headers(page) -> dict[str, str]:
         timeout=60_000,
     )
 
-    page.wait_for_timeout(6_000)
+    page.wait_for_timeout(7_000)
 
     if not captured:
-        labels = (
-            "Выбрать корт",
-            "Выбрать дату и время",
-            "Выбрать услугу",
-        )
-
-        for label in labels:
-            try:
-                locator = page.get_by_text(
-                    label,
-                    exact=False,
-                )
-
-                if locator.count() > 0:
-                    locator.first.click(
-                        timeout=5_000
-                    )
-
-                    page.wait_for_timeout(5_000)
-
-                    if captured:
-                        break
-
-            except Exception as exc:
-                print(
-                    f"Click '{label}' skipped:",
-                    repr(exc),
-                )
-
-    if not captured:
-        print(
-            "Headers not captured, "
-            "reloading booking page..."
-        )
+        print("С первого раза заголовки не пойманы. Перезагрузка.")
 
         page.reload(
             wait_until="domcontentloaded",
@@ -281,70 +224,57 @@ def capture_fresh_headers(page) -> dict[str, str]:
         page.wait_for_timeout(7_000)
 
     if not captured:
-        title = page.title()
+        # Иногда запрос появляется после открытия одного из пунктов меню.
+        labels = [
+            "Выбрать корт",
+            "Выбрать дату и время",
+            "Выбрать услугу",
+        ]
 
+        for label in labels:
+            try:
+                locator = page.get_by_text(label, exact=False)
+
+                if locator.count() > 0:
+                    locator.first.click(timeout=5_000)
+                    page.wait_for_timeout(5_000)
+
+                if captured:
+                    break
+
+            except Exception as exc:
+                print(f"Не удалось нажать «{label}»:", repr(exc))
+
+    if not captured:
         raise RuntimeError(
-            "Не удалось получить свежие "
-            "заголовки YCLIENTS. "
-            f"Заголовок страницы: {title!r}"
+            "Не удалось получить свежие заголовки YCLIENTS"
         )
 
     return captured
 
 
-def browser_api_post(
-    page,
+def api_post(
+    context,
     headers: dict[str, str],
     payload: dict,
 ) -> dict:
-    result = page.evaluate(
-        """
-        async ({url, headers, payload}) => {
-            try {
-                const response = await fetch(url, {
-                    method: "POST",
-                    headers: headers,
-                    body: JSON.stringify(payload),
-                    credentials: "include"
-                });
-
-                return {
-                    status: response.status,
-                    text: await response.text()
-                };
-            } catch (error) {
-                return {
-                    status: 0,
-                    text: String(error)
-                };
-            }
-        }
-        """,
-        {
-            "url": API_URL,
-            "headers": headers,
-            "payload": payload,
-        },
+    response = context.request.post(
+        API_URL,
+        headers=headers,
+        data=payload,
+        timeout=30_000,
+        fail_on_status_code=False,
     )
 
-    if not isinstance(result, dict):
-        raise RuntimeError(
-            f"Некорректный ответ: {result!r}"
-        )
-
-    status = int(result.get("status", 0))
-    text = str(result.get("text", ""))
+    status = response.status
+    text = response.text()
 
     print("YCLIENTS status:", status)
-    print(
-        "YCLIENTS response preview:",
-        text[:1200],
-    )
+    print("YCLIENTS response preview:", text[:1200])
 
     if status != 200:
         raise RuntimeError(
-            f"YCLIENTS вернул HTTP {status}: "
-            f"{text[:300]}"
+            f"YCLIENTS вернул HTTP {status}: {text[:350]}"
         )
 
     try:
@@ -352,7 +282,7 @@ def browser_api_post(
 
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            "YCLIENTS вернул не JSON"
+            "YCLIENTS вернул ответ не в формате JSON"
         ) from exc
 
 
@@ -360,9 +290,7 @@ def check_all_dates() -> dict[str, dict]:
     results: dict[str, dict] = {}
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=True
-        )
+        browser = playwright.chromium.launch(headless=True)
 
         context = browser.new_context(
             locale="ru-RU",
@@ -380,10 +308,7 @@ def check_all_dates() -> dict[str, dict]:
 
             for target_date in TARGET_DATES:
                 print("=" * 60)
-                print(
-                    "Checking date:",
-                    target_date,
-                )
+                print("Checking date:", target_date)
 
                 payload = {
                     "context": {
@@ -400,30 +325,19 @@ def check_all_dates() -> dict[str, dict]:
                     },
                 }
 
-                data = browser_api_post(
-                    page,
+                data = api_post(
+                    context,
                     headers,
                     payload,
                 )
 
-                found_times = (
-                    extract_bookable_times(data)
-                )
+                found_times = extract_bookable_times(data)
+                is_free = TARGET_TIME in found_times
 
-                is_free = (
-                    TARGET_TIME in found_times
-                )
-
+                print("Found times:", found_times)
                 print(
-                    "Found times:",
-                    found_times,
-                )
-
-                print(
-                    (
-                        f"Target {target_date} "
-                        f"{TARGET_TIME} free:"
-                    ),
+                    f"Target {target_date} "
+                    f"{TARGET_TIME} free:",
                     is_free,
                 )
 
@@ -446,22 +360,15 @@ def main() -> int:
         results = check_all_dates()
 
     except Exception as exc:
-        error_text = (
-            f"{type(exc).__name__}: {exc}"
-        )
+        error_text = f"{type(exc).__name__}: {exc}"
 
-        print(
-            "MONITOR ERROR:",
-            error_text,
-        )
+        print("MONITOR ERROR:", error_text)
 
+        # Пишем об ошибке один раз, а не каждые пять минут.
         if not state.get("monitor_error"):
             send_telegram(
-                "⚠️ Монитор кортов временно "
-                "не смог проверить YCLIENTS.\n\n"
-                "Одинаковыми ошибками спамить "
-                "не буду. После восстановления "
-                "пришлю сообщение.\n\n"
+                "⚠️ Монитор кортов временно не смог "
+                "проверить расписание YCLIENTS.\n\n"
                 f"Ошибка: {error_text[:350]}"
             )
 
@@ -470,88 +377,65 @@ def main() -> int:
 
         save_state(state)
 
-        # Возвращаем успешный код, чтобы GitHub
-        # не слал письма каждые пять минут.
+        # GitHub будет зелёным и не станет спамить письмами.
         return 0
 
-    if state.get("monitor_error"):
-        send_telegram(
-            "✅ Монитор кортов снова работает "
-            "и продолжает проверку."
-        )
+    monitor_was_broken = bool(state.get("monitor_error"))
+    startup_not_confirmed = not bool(
+        state.get("browser_monitor_started")
+    )
 
     state["monitor_error"] = False
     state.pop("last_error", None)
 
-    if not state.get(
-        "browser_monitor_started"
-    ):
+    # После ремонта или первого успешного запуска проверяем Telegram.
+    if monitor_was_broken or startup_not_confirmed:
         telegram_ok = send_telegram(
-            "✅ Монитор кортов обновлён и "
-            "работает через настоящий браузер.\n\n"
-            "Проверяю все вторники до конца "
-            "августа на 20:00."
+            "✅ Монитор кортов работает.\n\n"
+            "Проверяю все вторники до конца августа "
+            "на 20:00."
         )
 
         if telegram_ok:
-            state[
-                "browser_monitor_started"
-            ] = True
+            state["browser_monitor_started"] = True
 
     newly_free_dates: list[str] = []
 
     for target_date, result in results.items():
-        old_date_state = state["dates"].get(
-            target_date,
-            {},
-        )
+        previous = state["dates"].get(target_date, {})
 
-        was_free = bool(
-            old_date_state.get(
-                "was_free",
-                False,
-            )
-        )
-
+        was_free = bool(previous.get("was_free", False))
         is_free = bool(result["is_free"])
 
         if is_free and not was_free:
-            newly_free_dates.append(
-                target_date
-            )
+            newly_free_dates.append(target_date)
 
     alert_sent = True
 
     if newly_free_dates:
         dates_text = "\n".join(
-            (
-                f"— {target_date} "
-                f"в {TARGET_TIME}"
-            )
-            for target_date
-            in newly_free_dates
+            f"— {target_date} в {TARGET_TIME}"
+            for target_date in newly_free_dates
         )
 
         alert_sent = send_telegram(
             "🚨 КОРТ ОСВОБОДИЛСЯ!\n\n"
             f"{dates_text}\n\n"
-            "Бронировать:\n"
+            "Беги бронировать:\n"
             f"{BOOKING_URL}"
         )
 
     for target_date, result in results.items():
         is_free = bool(result["is_free"])
 
-        if (
-            target_date in newly_free_dates
-            and not alert_sent
-        ):
-            # Если Telegram упал, повторим
-            # отправку на следующей проверке.
+        # Если Telegram не отправил алерт, сохраняем старое
+        # состояние, чтобы повторить попытку через пять минут.
+        if target_date in newly_free_dates and not alert_sent:
             continue
 
         state["dates"][target_date] = {
             "was_free": is_free,
+            "found_times": result["found_times"],
         }
 
     save_state(state)
