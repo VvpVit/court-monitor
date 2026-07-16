@@ -101,7 +101,7 @@
     "22:00"
   ],
   "last_checked": "2026-07-21 20:00",
-  "last_error": "RuntimeError: YCLIENTS вернул HTTP 0: TypeError: Failed to fetch",
+  "last_error": "Error: APIRequestContext.post: Header name must be a valid HTTP token [\":authority\"]",
   "monitor_error": true,
   "was_free": false
 }
