@@ -89,6 +89,7 @@
     "22:00"
   ],
   "last_checked": "2026-07-21 20:00",
-  "monitor_error": false,
+  "last_error": "RuntimeError: Не удалось получить свежие заголовки запроса search-timeslots",
+  "monitor_error": true,
   "was_free": false
 }
