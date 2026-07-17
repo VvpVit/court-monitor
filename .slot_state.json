@@ -27,8 +27,6 @@
       "found_times": [
         "08:00",
         "11:00",
-        "12:00",
-        "13:00",
         "14:00",
         "15:00",
         "16:00",
@@ -42,7 +40,6 @@
       "found_times": [
         "08:00",
         "11:00",
-        "12:00",
         "13:00",
         "14:00",
         "16:00",
@@ -89,7 +86,6 @@
     "22:00"
   ],
   "last_checked": "2026-07-21 20:00",
-  "last_error": "RuntimeError: Не удалось получить свежие заголовки запроса search-timeslots",
-  "monitor_error": true,
+  "monitor_error": false,
   "was_free": false
 }
