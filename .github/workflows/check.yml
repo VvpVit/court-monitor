@@ -2,7 +2,8 @@ name: Court Monitor
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    # В 03, 08, 13, 18... минуты каждого часа
+    - cron: "3-58/5 * * * *"
   workflow_dispatch:
 
 permissions:
