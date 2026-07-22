@@ -79,7 +79,7 @@
     "22:00"
   ],
   "last_checked": "2026-07-21 20:00",
-  "last_error": "RuntimeError: Не удалось получить свежие заголовки запроса search-timeslots",
+  "last_error": "RuntimeError: YCLIENTS вернул HTTP 422: <!DOCTYPE html>\n<html lang=\"ru\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>422 - Не удалось отобразить страницу</title>\n    <link href=\"https://cdn.yclients.com/status-page/assets/favicon.ico\" rel=\"icon\" type=\"image/x-icon\" />\n    <link rel=\"preconnect\" href=\"https://font",
   "monitor_error": true,
   "was_free": false
 }
