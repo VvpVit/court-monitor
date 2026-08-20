@@ -79,7 +79,7 @@
     "22:00"
   ],
   "last_checked": "2026-07-21 20:00",
-  "last_error": "RuntimeError: Не удалось получить свежие заголовки запроса search-timeslots",
+  "last_error": "TimeoutError: Page.goto: Timeout 60000ms exceeded.\nCall log:\n  - navigating to \"https://b1009933.yclients.com/company/936902/personal/menu?o=\", waiting until \"domcontentloaded\"\n",
   "monitor_error": true,
   "was_free": false
 }
